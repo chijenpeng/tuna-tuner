@@ -1,0 +1,145 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft release tag to build and upload to
+        required: true
+        default: v0.5.0
+        type: string
+
+jobs:
+  build:
+    if: github.repository == 'chijenpeng/tuna-tuner' && github.event.repository.private == false
+    runs-on: windows-2022
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+
+    steps:
+      - name: Check out the requested release tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify release tag and checked-out commit
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Expected a semantic version tag such as v0.5.0, got '$env:RELEASE_TAG'."
+          }
+          $project = Get-Content -LiteralPath CMakeLists.txt -Raw
+          if ($project -notmatch 'project\(CodyPitch VERSION ([0-9]+\.[0-9]+\.[0-9]+)') {
+            throw "Could not determine the CMake project version."
+          }
+          $expectedTag = "v$($Matches[1])"
+          if ($env:RELEASE_TAG -ne $expectedTag) {
+            throw "Release tag $env:RELEASE_TAG does not match CMake project version $expectedTag."
+          }
+          $head = (git rev-parse HEAD).Trim()
+          $tagCommit = (git rev-parse "$($env:RELEASE_TAG)^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $tagCommit) {
+            throw "Checked-out commit $head does not match tag $env:RELEASE_TAG ($tagCommit)."
+          }
+
+      - name: Configure native x64 Release build
+        shell: pwsh
+        run: >-
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_BUILD_TYPE=Release
+          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP/deps"
+
+      - name: Build VST3, tests, and tools
+        shell: pwsh
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Run native Windows regression tests
+        shell: pwsh
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package VST3 and notices
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          $packageRoot = Join-Path $env:RUNNER_TEMP "tuna-tuner-package"
+          $licenses = Join-Path $packageRoot "licenses"
+          $docs = Join-Path $packageRoot "docs"
+          $plugin = "build/CodyPitch_artefacts/Release/VST3/Tuna Tuner.vst3"
+          if (-not (Test-Path -LiteralPath $plugin -PathType Container)) {
+            throw "Expected VST3 bundle was not built: $plugin"
+          }
+          New-Item -ItemType Directory -Force -Path $packageRoot, $licenses, $docs | Out-Null
+          Copy-Item -LiteralPath $plugin -Destination (Join-Path $packageRoot "Tuna Tuner.vst3") -Recurse
+          Copy-Item -LiteralPath README.md, THIRD_PARTY_NOTICES.md -Destination $packageRoot
+          Copy-Item -LiteralPath docs/editor.png -Destination $docs
+          Copy-Item -Path licenses/* -Destination $licenses -Recurse
+          Copy-Item -LiteralPath Resources/fonts/Inter-LICENSE.txt, Resources/fonts/JetBrainsMono-LICENSE.txt -Destination $licenses
+          $juce = Join-Path $env:RUNNER_TEMP "deps/juce-src"
+          if (-not (Test-Path -LiteralPath $juce -PathType Container)) {
+            throw "Expected fetched JUCE source was not found: $juce"
+          }
+          Copy-Item -LiteralPath (Join-Path $juce "LICENSE.md") -Destination (Join-Path $licenses "JUCE-LICENSE.md")
+          $sdk = Join-Path $juce "modules/juce_audio_processors/format_types/VST3_SDK"
+          Copy-Item -LiteralPath "$sdk/LICENSE.txt" -Destination (Join-Path $licenses "VST3-SDK-LICENSE.txt")
+          Copy-Item -LiteralPath "$sdk/base/LICENSE.txt" -Destination (Join-Path $licenses "VST3-SDK-base-LICENSE.txt")
+          Copy-Item -LiteralPath "$sdk/pluginterfaces/LICENSE.txt" -Destination (Join-Path $licenses "VST3-SDK-pluginterfaces-LICENSE.txt")
+          Copy-Item -LiteralPath "$sdk/public.sdk/LICENSE.txt" -Destination (Join-Path $licenses "VST3-SDK-public-sdk-LICENSE.txt")
+          $world = Join-Path $env:RUNNER_TEMP "deps/world-src/LICENSE.txt"
+          if (-not (Test-Path -LiteralPath $world -PathType Leaf)) { $world = "build/_deps/world-src/LICENSE.txt" }
+          Copy-Item -LiteralPath $world -Destination (Join-Path $licenses "WORLD-LICENSE.txt")
+
+          @"
+          Tuna Tuner $version — Windows x64 VST3
+
+          Copy Tuna Tuner.vst3 to %CommonProgramFiles%\VST3 and rescan plug-ins in your DAW.
+          This package is unsigned. Its identity is independent of the development
+          copy, but its bundle filename is the same. Preserve any existing development
+          bundle recoverably before copying; old sessions still use the development
+          identity. Windows side-by-side bundle-renaming behavior is unverified.
+          See README.md and BUILD-INFO.txt.
+          If the VST3 cannot load, install Microsoft's current x64 Visual C++
+          Redistributable: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist
+          "@ | Set-Content -LiteralPath (Join-Path $packageRoot "INSTALL.txt") -Encoding utf8
+
+          @(
+            "Product: Tuna Tuner"
+            "Version: $version"
+            "Release tag: $env:RELEASE_TAG"
+            "Source commit: $((git rev-parse HEAD).Trim())"
+            "Build: Windows x64 native MSVC Release"
+            "Tests: CTest passed on windows-2022"
+            "Signing: unsigned"
+            "Identity: com.c0dypeng.tunatuner; manufacturer Cdpg; plug-in code Tuna"
+          ) | Set-Content -LiteralPath (Join-Path $packageRoot "BUILD-INFO.txt") -Encoding utf8
+          $zipPath = Join-Path $env:RUNNER_TEMP "tuna-tuner-$version-windows-x64.zip"
+          Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
+          $verifyRoot = Join-Path $env:RUNNER_TEMP "tuna-tuner-zip-verify"
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $verifyRoot -Force
+          $binary = Join-Path $verifyRoot "Tuna Tuner.vst3/Contents/x86_64-win/Tuna Tuner.vst3"
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Expected x64 VST3 binary missing from ZIP: $binary" }
+          $dumpbin = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -find "VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { throw "Could not locate Visual Studio dumpbin.exe" }
+          $headers = & $dumpbin /headers $binary 2>&1 | Out-String
+          if ($headers -notmatch '8664 machine \(x64\)') { throw "VST3 PE machine is not x64" }
+          $exports = & $dumpbin /exports $binary 2>&1 | Out-String
+          if ($exports -notmatch 'GetPluginFactory') { throw "VST3 GetPluginFactory export missing" }
+          $shaPath = "$zipPath.sha256"
+          "$( (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLower() )  $(Split-Path -Leaf $zipPath)" | Set-Content -LiteralPath $shaPath -Encoding ascii
+          "PACKAGE_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PACKAGE_SHA_PATH=$shaPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload package to the existing draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $isDraft = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft
+          if ($LASTEXITCODE -ne 0 -or $isDraft.Trim() -ne "true") {
+            throw "Release $env:RELEASE_TAG must already exist as a draft."
+          }
+          gh release upload $env:RELEASE_TAG $env:PACKAGE_PATH $env:PACKAGE_SHA_PATH --repo $env:GITHUB_REPOSITORY --clobber

@@ -7,11 +7,11 @@ Tuna Tuner tracks the pitch of one lead vocal line, finds the nearest allowed no
 
 ![Tuna Tuner editor](docs/editor.png)
 
-This release has its own plug-in identity: bundle ID `com.c0dypeng.tunatuner`, manufacturer code `Cdpg`, plug-in code `Tuna`. It builds as AU and VST3 for macOS and VST3 for Windows; there is no Standalone format. The parameter IDs, order, ranges, defaults and the `CodyPitchState` saved-state format are the same as in the original development source, so compatible state can be transferred between the two. Existing DAW sessions keep identifying the original plug-in and are not replaced automatically.
+This release has its own plug-in identity: bundle ID `com.c0dypeng.tunatuner`, manufacturer code `Cdpg`, plug-in code `Tuna`. It builds as AU and VST3 for macOS; the source also builds a Windows VST3, which is not released (see Downloads). There is no Standalone format. The parameter IDs, order, ranges, defaults and the `CodyPitchState` saved-state format are the same as in the original development source, so compatible state can be transferred between the two. Existing DAW sessions keep identifying the original plug-in and are not replaced automatically.
 
 ## Downloads
 
-Get the latest packages from the [Tuna Tuner releases page](https://github.com/chijenpeng/tuna-tuner/releases/latest). The macOS release contains Universal AU and VST3 bundles for Apple Silicon and Intel. The Windows release contains a native x64 VST3. macOS bundles are ad-hoc signed and are not notarized; the Windows plug-in is unsigned.
+Get the latest package from the [Tuna Tuner releases page](https://github.com/chijenpeng/tuna-tuner/releases/latest). It contains Universal AU and VST3 bundles for Apple Silicon and Intel Macs, ad-hoc signed and not notarized. There is no Windows package: the Windows x64 build compiles, but its real-time engine test fails with worker underruns on the Windows build machine, so a Windows build is not offered.
 
 The original and this release both install as `Tuna Tuner.component` and `Tuna Tuner.vst3`. If the original is installed, move or rename its bundles before copying these, or the copy replaces them.
 

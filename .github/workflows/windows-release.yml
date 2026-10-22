@@ -129,7 +129,7 @@ jobs:
           $exports = & $dumpbin /exports $binary 2>&1 | Out-String
           if ($exports -notmatch 'GetPluginFactory') { throw "VST3 GetPluginFactory export missing" }
           $shaPath = "$zipPath.sha256"
-          "$( (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLower() )  $(Split-Path -Leaf $zipPath)" | Set-Content -LiteralPath $shaPath -Encoding ascii
+          [System.IO.File]::WriteAllText($shaPath, "$( (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLower() )  $(Split-Path -Leaf $zipPath)`n")
           "PACKAGE_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "PACKAGE_SHA_PATH=$shaPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
